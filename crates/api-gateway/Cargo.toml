@@ -1,0 +1,15 @@
+[package]
+name    = "api-gateway"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "api-gateway"
+path = "src/main.rs"
+
+[dependencies]
+tokio  = { workspace = true }
+axum   = { workspace = true }
+serde  = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
