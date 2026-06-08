@@ -83,5 +83,9 @@ Build the core in isolation first, then wrap it. Don't start with infra.
 - Money: a decimal crate (`rust_decimal`), never `f64`.
 - For the engine core, look into the LMAX Disruptor / ring-buffer pattern once the naive version works — but only after it works.
 
+## Rust learnings skill
+
+Before answering any Rust question, load `.claude/skills/rust-learnings/SKILL.md` and scan it for a matching pattern. If one matches, quote the relevant section so the user can connect the new question to something they already learned. When a new pattern emerges that's worth keeping, add it to the skill file.
+
 ## How to start a session with me
 Assume I'll say what I'm working on and where I am. Don't dump a plan. Ask what I'm trying to do, or just answer the specific thing I asked — at the scope I asked for, and no wider.

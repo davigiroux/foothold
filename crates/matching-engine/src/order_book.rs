@@ -28,33 +28,59 @@ impl OrderBook {
 
     /// Best (highest) bid price, or None if the book is empty on that side
     pub fn best_bid(&self) -> Option<Price> {
-        if let Some((key, _)) = self.bids.first_key_value() {
+        self.bids.first_key_value().map(|(key, _)| {
             let Reverse(price) = *key;
-            Some(price)
-        } else {
-            None
-        }
+            price
+        })
     }
 
     /// Best (lowest) ask price, or None if the book is empty on that side
     pub fn best_ask(&self) -> Option<Price> {
-        if let Some((price, _)) = self.asks.first_key_value() {
-            Some(*price)
-        } else {
-            None
-        }
+        self.asks.first_key_value().map(|(price, _)| *price)
     }
 
     /// Returns ask - bid, or None if either side is empty
     pub fn spread(&self) -> Option<Price> {
-        let ask_price = self.best_ask();
-        let bid_price = self.best_bid();
+        self.best_ask().zip(self.best_bid()).map(|(ask, bid)| ask - bid)
+    }
 
-        if let (Some(ask), Some(bid)) = (ask_price, bid_price) {
-            Some(ask - bid)
-        } else {
-            None
+    fn is_crossable(&self, side: Side, order_price: Price) -> bool {
+        match side {
+            Side::Bid => self.best_ask().map_or(false, |ask| ask <= order_price),
+            Side::Ask => self.best_bid().map_or(false, |bid| bid >= order_price),
         }
+    }
+
+    /// Fills the front resting order in `queue` against an incoming order.
+    /// Returns the trade and whether the price level is now empty.
+    fn fill_resting(
+        index: &mut HashMap<OrderId, (Side, Price)>,
+        queue: &mut VecDeque<Order>,
+        incoming_remaining: &mut Decimal,
+        taker_id: OrderId,
+        taker_symbol: &str,
+        taker_seq: u64,
+    ) -> (Trade, bool) {
+        let mut resting = queue
+            .pop_front()
+            .expect("fill_resting called on empty queue");
+        let fill_qty = min(resting.remaining, *incoming_remaining);
+        *incoming_remaining -= fill_qty;
+        resting.remaining -= fill_qty;
+        let trade = Trade {
+            maker_order_id: resting.id,
+            taker_order_id: taker_id,
+            price: resting.price.unwrap(),
+            quantity: fill_qty,
+            symbol: taker_symbol.to_string(),
+            sequence_id: taker_seq,
+        };
+        if resting.remaining > Decimal::ZERO {
+            queue.push_front(resting);
+        } else {
+            index.remove(&resting.id);
+        }
+        (trade, queue.is_empty())
     }
 
     /// Insert a resting limit order and run matching.
@@ -62,118 +88,64 @@ impl OrderBook {
     pub fn add_limit_order(&mut self, mut order: Order) -> MatchResult {
         let mut trades = vec![];
         let mut incoming_remaining = order.quantity;
-        let best_ask = self.best_ask();
-        let best_bid = self.best_bid();
         let order_price = order.price.unwrap();
-        let mut is_crossable = false;
 
-        if order.side == Side::Bid {
-            is_crossable = match best_ask {
-                Some(ask) => ask <= order_price,
-                None => false,
-            };
-        } else if order.side == Side::Ask {
-            is_crossable = match best_bid {
-                Some(bid) => bid >= order_price,
-                None => false,
-            };
-        }
-
-        while incoming_remaining > Decimal::ZERO && is_crossable {
-            if order.side == Side::Bid {
-                if let Some(mut entry) = self.asks.first_entry() {
-                    let queue = entry.get_mut();
-                    if let Some(mut resting) = queue.pop_front() {
-                        // Has resting order to fill
-                        let fill_qty = min(resting.remaining, incoming_remaining);
-                        incoming_remaining -= fill_qty;
-                        resting.remaining -= fill_qty;
-                        let new_trade = Trade {
-                            maker_order_id: resting.id,
-                            taker_order_id: order.id,
-                            price: resting.price.unwrap(),
-                            quantity: fill_qty,
-                            symbol: order.symbol.clone(),
-                            sequence_id: order.sequence_id,
-                        };
-
-                        trades.push(new_trade);
-
-                        if resting.remaining > Decimal::ZERO {
-                            queue.push_front(resting);
-                        } else {
-                            self.index.remove(&resting.id);
-                            if queue.is_empty() {
-                                entry.remove();
-                            }
+        while incoming_remaining > Decimal::ZERO && self.is_crossable(order.side, order_price) {
+            match order.side {
+                Side::Bid => {
+                    if let Some(mut entry) = self.asks.first_entry() {
+                        let (trade, level_empty) = Self::fill_resting(
+                            &mut self.index,
+                            entry.get_mut(),
+                            &mut incoming_remaining,
+                            order.id,
+                            &order.symbol,
+                            order.sequence_id,
+                        );
+                        trades.push(trade);
+                        if level_empty {
+                            entry.remove();
                         }
                     }
                 }
-                is_crossable = match self.best_ask() {
-                    Some(ask) => ask <= order_price,
-                    None => false,
-                };
-            } else if order.side == Side::Ask {
-                if let Some(mut entry) = self.bids.first_entry() {
-                    let queue = entry.get_mut();
-                    if let Some(mut resting) = queue.pop_front() {
-                        // Has resting order to fill
-                        let fill_qty = min(resting.remaining, incoming_remaining);
-                        incoming_remaining -= fill_qty;
-                        resting.remaining -= fill_qty;
-                        let new_trade = Trade {
-                            maker_order_id: resting.id,
-                            taker_order_id: order.id,
-                            price: resting.price.unwrap(),
-                            quantity: fill_qty,
-                            symbol: order.symbol.clone(),
-                            sequence_id: order.sequence_id,
-                        };
-
-                        trades.push(new_trade);
-
-                        if resting.remaining > Decimal::ZERO {
-                            queue.push_front(resting);
-                        } else {
-                            self.index.remove(&resting.id);
-                            if queue.is_empty() {
-                                entry.remove();
-                            }
+                Side::Ask => {
+                    if let Some(mut entry) = self.bids.first_entry() {
+                        let (trade, level_empty) = Self::fill_resting(
+                            &mut self.index,
+                            entry.get_mut(),
+                            &mut incoming_remaining,
+                            order.id,
+                            &order.symbol,
+                            order.sequence_id,
+                        );
+                        trades.push(trade);
+                        if level_empty {
+                            entry.remove();
                         }
                     }
                 }
-                is_crossable = match self.best_bid() {
-                    Some(bid) => bid >= order_price,
-                    None => false,
-                };
             }
         }
 
         if incoming_remaining > Decimal::ZERO {
             order.remaining = incoming_remaining;
             self.index.insert(order.id, (order.side, order_price));
-
-            if order.side == Side::Ask {
-                self.asks
+            match order.side {
+                Side::Ask => self.asks
                     .entry(order_price)
                     .or_insert_with(VecDeque::new)
-                    .push_back(order.clone());
-            } else {
-                self.bids
+                    .push_back(order.clone()),
+                Side::Bid => self.bids
                     .entry(Reverse(order_price))
                     .or_insert_with(VecDeque::new)
-                    .push_back(order.clone());
+                    .push_back(order.clone()),
             }
         }
 
-        return MatchResult {
+        MatchResult {
             trades,
-            remaining: if incoming_remaining > Decimal::ZERO {
-                Some(order)
-            } else {
-                None
-            },
-        };
+            remaining: (incoming_remaining > Decimal::ZERO).then_some(order),
+        }
     }
 
     /// Execute a market order against the book immediately.
@@ -184,122 +156,84 @@ impl OrderBook {
         let mut incoming_remaining = order.quantity;
 
         while incoming_remaining > Decimal::ZERO {
-            if order.side == Side::Bid {
-                if let Some(mut entry) = self.asks.first_entry() {
-                    let queue = entry.get_mut();
-                    if let Some(mut resting) = queue.pop_front() {
-                        // Has resting order to fill
-                        let fill_qty = min(resting.remaining, incoming_remaining);
-                        incoming_remaining -= fill_qty;
-                        resting.remaining -= fill_qty;
-                        let new_trade = Trade {
-                            maker_order_id: resting.id,
-                            taker_order_id: order.id,
-                            price: resting.price.unwrap(),
-                            quantity: fill_qty,
-                            symbol: order.symbol.clone(),
-                            sequence_id: order.sequence_id,
-                        };
-
-                        trades.push(new_trade);
-
-                        if resting.remaining > Decimal::ZERO {
-                            queue.push_front(resting);
-                        } else {
-                            self.index.remove(&resting.id);
-                            if queue.is_empty() {
-                                entry.remove();
-                            }
+            let exhausted = match order.side {
+                Side::Bid => match self.asks.first_entry() {
+                    Some(mut entry) => {
+                        let (trade, level_empty) = Self::fill_resting(
+                            &mut self.index,
+                            entry.get_mut(),
+                            &mut incoming_remaining,
+                            order.id,
+                            &order.symbol,
+                            order.sequence_id,
+                        );
+                        trades.push(trade);
+                        if level_empty {
+                            entry.remove();
                         }
+                        false
                     }
-                } else {
-                    break;
-                }
-            } else if order.side == Side::Ask {
-                if let Some(mut entry) = self.bids.first_entry() {
-                    let queue = entry.get_mut();
-                    if let Some(mut resting) = queue.pop_front() {
-                        // Has resting order to fill
-                        let fill_qty = min(resting.remaining, incoming_remaining);
-                        incoming_remaining -= fill_qty;
-                        resting.remaining -= fill_qty;
-                        let new_trade = Trade {
-                            maker_order_id: resting.id,
-                            taker_order_id: order.id,
-                            price: resting.price.unwrap(),
-                            quantity: fill_qty,
-                            symbol: order.symbol.clone(),
-                            sequence_id: order.sequence_id,
-                        };
-
-                        trades.push(new_trade);
-
-                        if resting.remaining > Decimal::ZERO {
-                            queue.push_front(resting);
-                        } else {
-                            self.index.remove(&resting.id);
-                            if queue.is_empty() {
-                                entry.remove();
-                            }
+                    None => true,
+                },
+                Side::Ask => match self.bids.first_entry() {
+                    Some(mut entry) => {
+                        let (trade, level_empty) = Self::fill_resting(
+                            &mut self.index,
+                            entry.get_mut(),
+                            &mut incoming_remaining,
+                            order.id,
+                            &order.symbol,
+                            order.sequence_id,
+                        );
+                        trades.push(trade);
+                        if level_empty {
+                            entry.remove();
                         }
+                        false
                     }
-                } else {
-                    break;
-                }
+                    None => true,
+                },
+            };
+            if exhausted {
+                break;
             }
         }
 
         order.remaining = incoming_remaining;
-        return MatchResult {
+        MatchResult {
             trades,
-            remaining: if incoming_remaining > Decimal::ZERO {
-                Some(order)
-            } else {
-                None
-            },
-        };
+            remaining: (incoming_remaining > Decimal::ZERO).then_some(order),
+        }
     }
 
     /// Remove a resting order by ID. Returns the cancelled order, or None if
     /// the order was already filled or never existed.
     pub fn cancel_order(&mut self, id: OrderId) -> Option<Order> {
-        if let Some((side, price)) = self.index.get(&id).copied() {
-            let mut removed: Option<Order> = None;
-            let mut empty_queue = false;
-            if side == Side::Ask {
-                if let Some(queue) = self.asks.get_mut(&price) {
-                    if let Some(pos) = queue.iter().position(|o| o.id == id) {
-                        removed = queue.remove(pos);
+        let (side, price) = self.index.get(&id).copied()?;
 
-                        if queue.is_empty() {
-                            empty_queue = true;
-                        }
-                    }
-                }
-                if empty_queue {
-                    self.asks.remove(&price);
-                }
-                self.index.remove(&id);
-                removed
-            } else {
-                if let Some(queue) = self.bids.get_mut(&Reverse(price)) {
-                    if let Some(pos) = queue.iter().position(|o| o.id == id) {
-                        removed = queue.remove(pos);
-
-                        if queue.is_empty() {
-                            empty_queue = true;
-                        }
-                    }
-                }
-                if empty_queue {
-                    self.bids.remove(&Reverse(price));
-                }
-                self.index.remove(&id);
-                removed
+        let (removed, empty) = match side {
+            Side::Ask => {
+                let queue = self.asks.get_mut(&price)?;
+                let pos = queue.iter().position(|o| o.id == id)?;
+                let order = queue.remove(pos)?;
+                (order, queue.is_empty())
             }
-        } else {
-            None
+            Side::Bid => {
+                let queue = self.bids.get_mut(&Reverse(price))?;
+                let pos = queue.iter().position(|o| o.id == id)?;
+                let order = queue.remove(pos)?;
+                (order, queue.is_empty())
+            }
+        };
+
+        if empty {
+            match side {
+                Side::Ask => { self.asks.remove(&price); }
+                Side::Bid => { self.bids.remove(&Reverse(price)); }
+            }
         }
+        self.index.remove(&id);
+        Some(removed)
     }
 
     /// Depth snapshot: the top `levels` price levels on each side.
@@ -326,10 +260,7 @@ impl OrderBook {
             .take(levels)
             .collect();
 
-        Depth {
-            bids: bids,
-            asks: asks,
-        }
+        Depth { bids, asks }
     }
 }
 
