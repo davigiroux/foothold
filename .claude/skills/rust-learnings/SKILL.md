@@ -27,7 +27,10 @@ Before answering a Rust question:
 | `if cond { Some(x) } else { None }` | `condition.then_some(x)` |
 | `{ field: field, other: other }` in a struct literal | `{ field, other }` shorthand |
 | `&mut x` in a function signature | Swap to `x: &mut T` |
+| Confused why a function needs `&mut` vs `&` | `&` = read-only, `&mut` = read+write, exclusive |
+| Confused why not just pass `T` directly | Passing `T` transfers ownership — caller loses it |
 | `let Reverse(price) = *key` inside `.map()` | Destructure directly in closure param: `|(Reverse(price), _)|` |
+| Why does `Reverse` appear everywhere, not just the field definition? | `Reverse<Price>` is a different type — every key interaction must use it |
 
 ---
 
@@ -197,6 +200,65 @@ Depth { bids, asks }               // after
 fn fill(&mut queue: VecDeque<Order>)  // wrong — &mut goes on the type
 fn fill(queue: &mut VecDeque<Order>)  // correct
 ```
+
+---
+
+### Passing `T` vs `&T` vs `&mut T` — ownership vs borrowing
+
+**Trigger:** confused why not just pass the value directly instead of a reference
+
+TS analogy: JS always implicitly passes objects by reference. Rust makes you choose explicitly.
+
+| How you pass | Ownership | Caller still has it? |
+|---|---|---|
+| `T` | transfers to function | ❌ consumed |
+| `&T` | borrowed (read-only) | ✅ unchanged |
+| `&mut T` | borrowed (read+write) | ✅ modified in place |
+
+Passing by value (`T`) means the function owns it now — when the function ends, it's dropped. That's why `fill_resting` can't take `index: HashMap<...>` by value — `self.index` would be consumed and `OrderBook` would be broken afterward.
+
+Rule: if the caller needs the value after the call, pass a reference. Only pass by value when you genuinely want to transfer ownership.
+
+---
+
+### `&T` vs `&mut T` — shared vs exclusive reference
+
+**Trigger:** confused why a parameter needs `&mut` instead of `&`
+
+TS analogy: `&T` ≈ passing an object with `Object.freeze()` — reads fine, any write is rejected. `&mut T` = normal mutable pass-by-reference.
+
+| | `&T` | `&mut T` |
+|---|---|---|
+| Read | ✅ | ✅ |
+| Write | ❌ | ✅ |
+| How many can exist at once | unlimited | exactly one |
+
+```rust
+fn read_only(queue: &VecDeque<Order>) { /* can only read */ }
+fn mutating(queue: &mut VecDeque<Order>) { queue.pop_front(); /* ok */ }
+```
+
+Rule: if the function calls any mutating method (`.remove()`, `.pop_front()`, `-=`, etc.) on the parameter, it needs `&mut`. The compiler will reject it otherwise.
+
+---
+
+### `Reverse<T>` leaks to every key interaction
+
+**Trigger:** "why do I need `Reverse` everywhere, not just at the field definition?"
+
+`Reverse<Price>` is a **different type** from `Price`. It's a newtype wrapper that flips `Ord` — not a flag on the map. So any operation that touches a key must use `Reverse<Price>`, not `Price`.
+
+TS analogy: if your Map was typed `Map<ReverseNumber, V>` where `type ReverseNumber = { value: number }`, you'd have to wrap/unwrap at every call site.
+
+```rust
+// Every key interaction uses Reverse<Price>:
+self.bids.get_mut(&Reverse(price))        // lookup
+self.bids.remove(&Reverse(price))         // remove
+self.bids.entry(Reverse(price))           // insert
+let Reverse(price) = *key                 // destructure from iteration
+```
+
+Why Rust works this way: `BTreeMap` has no comparator argument (unlike C++'s `std::map<K,V,Comparator>`). Idiomatic Rust solution is a newtype that implements `Ord` differently. Clean and zero-cost, but the type appears everywhere keys are used.
 
 ---
 
