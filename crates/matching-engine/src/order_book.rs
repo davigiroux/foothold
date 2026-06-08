@@ -56,16 +56,16 @@ impl OrderBook {
     fn fill_resting(
         index: &mut HashMap<OrderId, (Side, Price)>,
         queue: &mut VecDeque<Order>,
-        incoming_remaining: &mut Decimal,
+        leaves_qty: &mut Decimal,
         taker_id: OrderId,
         taker_symbol: &str,
-        taker_seq: u64,
+        sequence_id: u64,
     ) -> (Trade, bool) {
         let mut resting = queue
             .pop_front()
             .expect("fill_resting called on empty queue");
-        let fill_qty = min(resting.remaining, *incoming_remaining);
-        *incoming_remaining -= fill_qty;
+        let fill_qty = min(resting.remaining, *leaves_qty);
+        *leaves_qty -= fill_qty;
         resting.remaining -= fill_qty;
         let trade = Trade {
             maker_order_id: resting.id,
@@ -73,7 +73,7 @@ impl OrderBook {
             price: resting.price.unwrap(),
             quantity: fill_qty,
             symbol: taker_symbol.to_string(),
-            sequence_id: taker_seq,
+            sequence_id: sequence_id,
         };
         if resting.remaining > Decimal::ZERO {
             queue.push_front(resting);
@@ -87,17 +87,17 @@ impl OrderBook {
     /// Returns any trades that result plus the (possibly modified) order.
     pub fn add_limit_order(&mut self, mut order: Order) -> MatchResult {
         let mut trades = vec![];
-        let mut incoming_remaining = order.quantity;
+        let mut leaves_qty = order.quantity;
         let order_price = order.price.unwrap();
 
-        while incoming_remaining > Decimal::ZERO && self.is_crossable(order.side, order_price) {
+        while leaves_qty > Decimal::ZERO && self.is_crossable(order.side, order_price) {
             match order.side {
                 Side::Bid => {
                     if let Some(mut entry) = self.asks.first_entry() {
                         let (trade, level_empty) = Self::fill_resting(
                             &mut self.index,
                             entry.get_mut(),
-                            &mut incoming_remaining,
+                            &mut leaves_qty,
                             order.id,
                             &order.symbol,
                             order.sequence_id,
@@ -113,7 +113,7 @@ impl OrderBook {
                         let (trade, level_empty) = Self::fill_resting(
                             &mut self.index,
                             entry.get_mut(),
-                            &mut incoming_remaining,
+                            &mut leaves_qty,
                             order.id,
                             &order.symbol,
                             order.sequence_id,
@@ -127,8 +127,8 @@ impl OrderBook {
             }
         }
 
-        if incoming_remaining > Decimal::ZERO {
-            order.remaining = incoming_remaining;
+        if leaves_qty > Decimal::ZERO {
+            order.remaining = leaves_qty;
             self.index.insert(order.id, (order.side, order_price));
             match order.side {
                 Side::Ask => self.asks
@@ -144,7 +144,7 @@ impl OrderBook {
 
         MatchResult {
             trades,
-            remaining: (incoming_remaining > Decimal::ZERO).then_some(order),
+            remaining: (leaves_qty > Decimal::ZERO).then_some(order),
         }
     }
 
@@ -153,16 +153,16 @@ impl OrderBook {
     /// is represented as trades with the order's `remaining` set to the leftover.
     pub fn add_market_order(&mut self, mut order: Order) -> MatchResult {
         let mut trades = vec![];
-        let mut incoming_remaining = order.quantity;
+        let mut leaves_qty = order.quantity;
 
-        while incoming_remaining > Decimal::ZERO {
+        while leaves_qty > Decimal::ZERO {
             let exhausted = match order.side {
                 Side::Bid => match self.asks.first_entry() {
                     Some(mut entry) => {
                         let (trade, level_empty) = Self::fill_resting(
                             &mut self.index,
                             entry.get_mut(),
-                            &mut incoming_remaining,
+                            &mut leaves_qty,
                             order.id,
                             &order.symbol,
                             order.sequence_id,
@@ -180,7 +180,7 @@ impl OrderBook {
                         let (trade, level_empty) = Self::fill_resting(
                             &mut self.index,
                             entry.get_mut(),
-                            &mut incoming_remaining,
+                            &mut leaves_qty,
                             order.id,
                             &order.symbol,
                             order.sequence_id,
@@ -199,10 +199,10 @@ impl OrderBook {
             }
         }
 
-        order.remaining = incoming_remaining;
+        order.remaining = leaves_qty;
         MatchResult {
             trades,
-            remaining: (incoming_remaining > Decimal::ZERO).then_some(order),
+            remaining: (leaves_qty > Decimal::ZERO).then_some(order),
         }
     }
 
