@@ -4,8 +4,11 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-tokio        = { workspace = true }
 rust_decimal = { workspace = true }
 serde        = { workspace = true }
 thiserror    = { workspace = true }
-# redis = "0.24"  # uncomment when you reach this rung
+uuid         = { workspace = true }
+# redis = "0.24"  # uncomment when you reach the Redis rung
+
+[dev-dependencies]
+rust_decimal_macros = "1"
