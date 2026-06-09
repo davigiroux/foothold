@@ -17,9 +17,10 @@ A full centralized-exchange backend, from scratch, in Rust, deployed to AWS. No 
 | Component | Status |
 |-----------|--------|
 | Matching engine core (order book, price-time priority, cancel) | ✅ |
-| Sequencer — deterministic replay | 🔲 |
-| Risk engine + Redis fund locking | 🔲 |
-| API gateway — REST + WebSocket | 🔲 |
+| Sequencer — deterministic replay | ✅ |
+| Risk engine — fund/stock locking (in-memory; Redis later) | ✅ |
+| API gateway — REST (POST/DELETE /orders) | 🚧 tests written, handlers WIP |
+| API gateway — WebSocket streams | 🔲 |
 | Message bus + DB workers → Postgres | 🔲 |
 | Market data service | 🔲 |
 | Docker + local docker-compose | 🔲 |
@@ -55,7 +56,7 @@ Cold path (async)
 
 **Sequencer** — assigns a strictly increasing global sequence ID. Replay the log to rebuild state after a crash — the source of determinism.
 
-**Risk engine** — pre-trade checks against Redis balances. Atomically locks funds before an order enters the sequencer.
+**Risk engine** — pre-trade checks against in-memory balances (Redis later). Atomically locks funds/stock before an order enters the sequencer, releases on cancel.
 
 **Target:** < 1ms matching internally, < 50ms end-to-end, ~100k orders/sec peak.
 
@@ -83,7 +84,7 @@ Cold path (async)
 ```bash
 git clone https://github.com/davigiroux/foothold
 cd foothold
-cargo test -p matching-engine
+cargo test            # matching-engine, sequencer, risk-engine
 ```
 
 Requires Rust stable. No other dependencies for the engine core.
