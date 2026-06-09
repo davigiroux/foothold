@@ -4,6 +4,11 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-tokio        = { workspace = true }
-serde        = { workspace = true }
-thiserror    = { workspace = true }
+matching-engine = { path = "../matching-engine" }
+rust_decimal    = { workspace = true }
+serde           = { workspace = true }
+thiserror       = { workspace = true }
+
+[dev-dependencies]
+rust_decimal_macros = "1"
+uuid = { workspace = true }
