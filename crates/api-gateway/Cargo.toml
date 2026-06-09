@@ -8,8 +8,18 @@ name = "api-gateway"
 path = "src/main.rs"
 
 [dependencies]
-tokio  = { workspace = true }
-axum   = { workspace = true }
-serde  = { workspace = true }
-serde_json = { workspace = true }
-tracing = { workspace = true }
+matching-engine = { path = "../matching-engine" }
+risk-engine     = { path = "../risk-engine" }
+sequencer       = { path = "../sequencer" }
+
+tokio        = { workspace = true }
+axum         = { workspace = true }
+rust_decimal = { workspace = true }
+serde        = { workspace = true }
+serde_json   = { workspace = true }
+tracing      = { workspace = true }
+uuid         = { workspace = true, features = ["serde"] }
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }
+rust_decimal_macros = "1"
