@@ -93,7 +93,10 @@ async fn place_buy_with_funds_returns_202_and_order_id() {
     let (status, body) = call(&state, post_order(limit_buy(user, "100", "5"))).await;
 
     assert_eq!(status, StatusCode::ACCEPTED);
-    assert!(body.get("order_id").is_some(), "response should carry an order_id");
+    assert!(
+        body.get("order_id").is_some(),
+        "response should carry an order_id"
+    );
 }
 
 #[tokio::test]
@@ -152,7 +155,11 @@ async fn crossing_orders_match_and_clear_book() {
     let books = state.books.lock().unwrap();
     let book = books.get("AAPL").expect("book should exist after trading");
     assert_eq!(book.best_ask(), None, "ask should be fully consumed");
-    assert_eq!(book.best_bid(), None, "buy should fully fill, leaving nothing resting");
+    assert_eq!(
+        book.best_bid(),
+        None,
+        "buy should fully fill, leaving nothing resting"
+    );
 }
 
 // --- cancel_order ---
