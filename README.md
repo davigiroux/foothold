@@ -19,7 +19,7 @@ A full centralized-exchange backend, from scratch, in Rust, deployed to AWS. No 
 | Matching engine core (order book, price-time priority, cancel) | ✅ |
 | Sequencer — deterministic replay | ✅ |
 | Risk engine — fund/stock locking (in-memory; Redis later) | ✅ |
-| API gateway — REST (POST/DELETE /orders) | 🚧 tests written, handlers WIP |
+| API gateway — REST (POST/DELETE /orders) | ✅ |
 | API gateway — WebSocket streams | 🔲 |
 | Message bus + DB workers → Postgres | 🔲 |
 | Market data service | 🔲 |
@@ -84,7 +84,7 @@ Cold path (async)
 ```bash
 git clone https://github.com/davigiroux/foothold
 cd foothold
-cargo test            # matching-engine, sequencer, risk-engine
+cargo test            # matching-engine, sequencer, risk-engine, api-gateway
 ```
 
 Requires Rust stable. No other dependencies for the engine core.

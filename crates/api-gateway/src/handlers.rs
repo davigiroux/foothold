@@ -8,8 +8,11 @@ use matching_engine::{Order, OrderBook};
 use risk_engine::RiskError;
 use uuid::Uuid;
 
-use crate::models::{PlaceOrderRequest, PlaceOrderResponse};
 use crate::state::AppState;
+use crate::{
+    models::{PlaceOrderRequest, PlaceOrderResponse},
+    state::OpenOrder,
+};
 
 pub enum AppError {
     BadRequest(String),
@@ -74,7 +77,7 @@ pub async fn place_order(
 
     let order = Order {
         id: Uuid::new_v4(),
-        symbol: req.symbol,
+        symbol: req.symbol.clone(),
         price: req.price,
         side: book_side,
         order_type: order_type.clone(),
@@ -90,16 +93,34 @@ pub async fn place_order(
         seq.sequence(order)
     };
 
-    {
+    let has_resting_order = {
         let mut books = state.books.lock().unwrap();
         let book = books
             .entry(sequenced.order.symbol.clone())
             .or_insert_with(|| OrderBook::new(&sequenced.order.symbol));
 
-        let _ = match sequenced.order.order_type.clone() {
+        let result = match sequenced.order.order_type.clone() {
             matching_engine::OrderType::Limit => book.add_limit_order(sequenced.order),
             matching_engine::OrderType::Market => book.add_market_order(sequenced.order),
         };
+
+        result.remaining.is_some()
+    };
+
+    {
+        if has_resting_order {
+            let mut registry = state.registry.lock().unwrap();
+            registry.insert(
+                order_id,
+                OpenOrder {
+                    user_id: req.user_id,
+                    symbol: req.symbol,
+                    side,
+                    price,
+                    quantity: req.quantity,
+                },
+            );
+        }
     }
 
     Ok((StatusCode::ACCEPTED, Json(PlaceOrderResponse { order_id })))
@@ -108,6 +129,32 @@ pub async fn place_order(
 /// DELETE /orders/:id — cancel a resting order, release its locked funds.
 ///
 /// `Path(id)` extracts the `:id` path segment and parses it as a Uuid.
-pub async fn cancel_order(State(state): State<AppState>, Path(id): Path<Uuid>) -> StatusCode {
-    todo!()
+pub async fn cancel_order(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> Result<StatusCode, AppError> {
+    let open = {
+        let mut registry = state.registry.lock().unwrap();
+        registry.remove(&id).ok_or(AppError::NotFound)?
+    };
+
+    {
+        let mut books = state.books.lock().unwrap();
+        if let Some(book) = books.get_mut(&open.symbol) {
+            book.cancel_order(id);
+        }
+    }
+
+    {
+        let mut risk = state.risk.lock().unwrap();
+        risk.release(
+            open.user_id,
+            &open.symbol,
+            open.side,
+            open.price,
+            open.quantity,
+        )?;
+    }
+
+    Ok(StatusCode::OK)
 }
